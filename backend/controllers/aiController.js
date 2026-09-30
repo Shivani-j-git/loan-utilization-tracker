@@ -1,392 +1,423 @@
 const Loan = require('../models/Loan');
+const Repayment = require('../models/Repayment');
 
-// ========================================
-// HELPER: GET USER LOAN SUMMARY
-// ========================================
+/*
+  Get complete financial summary for the logged-in user
+*/
+const getUserFinancialData = async (userId) => {
+  const loans = await Loan.find({ userId }).sort({ nextEmiDate: 1 });
 
-const getLoanSummary = async (userId) => {
-  const loans = await Loan.find({
-    userId: userId,
-  });
+  const repayments = await Repayment.find({ userId })
+    .sort({ paymentDate: -1 });
 
-  const totalLoan = loans.reduce(
-    (sum, loan) =>
-      sum + Number(loan.principalAmount || 0),
+  const totalLoanAmount = loans.reduce(
+    (sum, loan) => sum + Number(loan.principalAmount || 0),
     0
   );
 
   const outstandingAmount = loans.reduce(
-    (sum, loan) =>
-      sum + Number(loan.outstandingBalance || 0),
+    (sum, loan) => sum + Number(loan.outstandingBalance || 0),
     0
   );
 
-  const repaidAmount = Math.max(
-    totalLoan - outstandingAmount,
+  const totalRepaidAmount = repayments.reduce(
+    (sum, repayment) => sum + Number(repayment.principalComponent || 0),
     0
   );
 
-  const utilization =
-    totalLoan > 0
-      ? (outstandingAmount / totalLoan) * 100
-      : 0;
+  const totalPayments = repayments.reduce(
+    (sum, repayment) => sum + Number(repayment.amountPaid || 0),
+    0
+  );
 
-  const repaymentProgress =
-    totalLoan > 0
-      ? (repaidAmount / totalLoan) * 100
-      : 0;
+  const totalInterestPaid = repayments.reduce(
+    (sum, repayment) => sum + Number(repayment.interestComponent || 0),
+    0
+  );
 
   const totalMonthlyEMI = loans.reduce(
-    (sum, loan) =>
-      sum + Number(loan.emiAmount || 0),
+    (sum, loan) => sum + Number(loan.emiAmount || 0),
     0
   );
 
-  const nextLoan = [...loans]
-    .filter((loan) => loan.nextEmiDate)
-    .sort(
-      (a, b) =>
-        new Date(a.nextEmiDate) -
-        new Date(b.nextEmiDate)
-    )[0];
+  const onTimePayments = repayments.filter(
+    repayment => repayment.isOnTime === true
+  ).length;
+
+  const latePayments = repayments.filter(
+    repayment => repayment.isOnTime === false
+  ).length;
+
+  const repaymentRate =
+    totalLoanAmount > 0
+      ? ((totalLoanAmount - outstandingAmount) / totalLoanAmount) * 100
+      : 0;
 
   return {
     loans,
-    loanCount: loans.length,
-    totalLoan,
+    repayments,
+    totalLoanAmount,
     outstandingAmount,
-    repaidAmount,
-    utilization,
-    repaymentProgress,
+    totalRepaidAmount,
+    totalPayments,
+    totalInterestPaid,
     totalMonthlyEMI,
-    nextLoan,
+    onTimePayments,
+    latePayments,
+    repaymentRate,
   };
 };
 
-// ========================================
-// GET AI STRATEGY
-// ========================================
 
+/*
+  GET /api/ai/strategy
+*/
 exports.getStrategy = async (req, res) => {
   try {
-    const summary = await getLoanSummary(req.user.id);
+    const userId = req.user.id;
 
-    const {
-      loans,
-      loanCount,
-      totalLoan,
-      outstandingAmount,
-      repaidAmount,
-      utilization,
-      repaymentProgress,
-      totalMonthlyEMI,
-      nextLoan,
-    } = summary;
+    const data = await getUserFinancialData(userId);
 
-    // No loans
-    if (loanCount === 0) {
+    if (data.loans.length === 0) {
       return res.json({
         strategy:
-          'No loans are currently recorded. Add your loan details to receive personalized repayment guidance.',
+          'You do not have any loans recorded yet. Add your loan details to receive personalized repayment guidance.'
       });
     }
 
-    let strategy = '';
-
-    // High outstanding balance
-    if (utilization >= 75) {
-      strategy +=
-        'A large portion of your original loan balance is still outstanding. Focus on consistent EMI payments and avoid unnecessary additional debt. ';
-    }
-
-    // Moderate outstanding balance
-    else if (utilization >= 40) {
-      strategy +=
-        'Your loan balance is progressing through repayment. Continue making your EMI payments consistently and monitor your outstanding balance. ';
-    }
-
-    // Low outstanding balance
-    else {
-      strategy +=
-        'You have made substantial progress on your loan repayment. Continue your regular EMI payments and monitor the remaining balance. ';
-    }
-
-    // EMI advice
-    if (totalMonthlyEMI > 0) {
-      strategy += `Your current combined monthly EMI is approximately ₹${totalMonthlyEMI.toLocaleString(
-        'en-IN'
-      )}. Keep this amount available before the respective due dates. `;
-    }
-
-    // Repayment progress
-    strategy += `You have repaid approximately ₹${repaidAmount.toLocaleString(
-      'en-IN'
-    )}, representing ${repaymentProgress.toFixed(
-      1
-    )}% of your original loan amount. `;
-
-    // Next EMI
-    if (nextLoan) {
-      const nextDate = new Date(
-        nextLoan.nextEmiDate
-      ).toLocaleDateString('en-IN');
-
-      strategy += `Your next recorded EMI is due on ${nextDate}.`;
-    }
-
-    res.json({
-      strategy,
-
-      summary: {
-        loanCount,
-        totalLoan,
-        outstandingAmount,
-        repaidAmount,
-        utilization: Number(
-          utilization.toFixed(2)
-        ),
-        repaymentProgress: Number(
-          repaymentProgress.toFixed(2)
-        ),
-        totalMonthlyEMI,
-      },
-    });
-  } catch (err) {
-    console.error(
-      'AI strategy error:',
-      err
+    const activeLoans = data.loans.filter(
+      loan => loan.status === 'active'
     );
 
+    if (activeLoans.length === 0) {
+      return res.json({
+        strategy:
+          'Your recorded loans are not currently active. Keep your repayment records updated to continue monitoring your loan health.'
+      });
+    }
+
+    const highestInterestLoan = [...activeLoans].sort(
+      (a, b) => Number(b.interestRate) - Number(a.interestRate)
+    )[0];
+
+    const nextLoan = [...activeLoans].sort(
+      (a, b) =>
+        new Date(a.nextEmiDate) - new Date(b.nextEmiDate)
+    )[0];
+
+    let strategy =
+      `You have ${activeLoans.length} active loan(s) with ` +
+      `₹${data.outstandingAmount.toLocaleString('en-IN')} outstanding. `;
+
+    strategy +=
+      `Your total monthly EMI is approximately ₹${data.totalMonthlyEMI.toLocaleString('en-IN')}. `;
+
+    if (highestInterestLoan) {
+      strategy +=
+        `Among your active loans, ${highestInterestLoan.lenderName} ` +
+        `(${highestInterestLoan.loanType} loan) has the highest interest rate ` +
+        `at ${highestInterestLoan.interestRate}%. `;
+    }
+
+    if (nextLoan) {
+      strategy +=
+        `Your next EMI is scheduled for ` +
+        `${new Date(nextLoan.nextEmiDate).toLocaleDateString('en-IN')}.`;
+    }
+
+    return res.json({ strategy });
+
+  } catch (err) {
+    console.error('AI strategy error:', err);
+
     res.status(500).json({
-      message:
-        'Error generating personalized strategy',
+      message: 'Error generating repayment strategy'
     });
   }
 };
 
-// ========================================
-// AI CHAT
-// ========================================
 
+/*
+  POST /api/ai/chat
+*/
 exports.chat = async (req, res) => {
   try {
-    const message = (
-      req.body.message || ''
-    ).toLowerCase();
+    const userId = req.user.id;
 
-    if (!message.trim()) {
+    const message = (req.body.message || '').trim();
+
+    if (!message) {
       return res.status(400).json({
-        message:
-          'Please enter a question.',
+        message: 'Please enter a question.'
       });
     }
 
-    const summary = await getLoanSummary(
-      req.user.id
-    );
+    const msg = message.toLowerCase();
 
-    const {
-      loans,
-      loanCount,
-      totalLoan,
-      outstandingAmount,
-      repaidAmount,
-      utilization,
-      repaymentProgress,
-      totalMonthlyEMI,
-      nextLoan,
-    } = summary;
+    const data = await getUserFinancialData(userId);
 
-    let reply = '';
+    /*
+      No loans
+    */
+    if (data.loans.length === 0) {
+      return res.json({
+        reply:
+          'You do not have any loans recorded yet. Add your loan details first, and I can help analyze your repayment situation.'
+      });
+    }
 
-    // ====================================
-    // GREETING
-    // ====================================
 
+    /*
+      Greeting
+    */
     if (
-      message.includes('hello') ||
-      message.includes('hi') ||
-      message.includes('hey')
+      msg.includes('hello') ||
+      msg.includes('hi') ||
+      msg.includes('hey')
     ) {
-      reply =
-        'Hello! 👋 I can help you understand your loan balance, repayment progress, EMI and upcoming payments.';
+      return res.json({
+        reply:
+          `Hello! 👋 You currently have ${data.loans.length} loan(s) recorded. ` +
+          `Your outstanding balance is ₹${data.outstandingAmount.toLocaleString('en-IN')}. ` +
+          `How can I help you understand your repayment plan?`
+      });
     }
 
-    // ====================================
-    // REMAINING / OUTSTANDING
-    // ====================================
 
-    else if (
-      message.includes('remaining') ||
-      message.includes('outstanding') ||
-      message.includes('left')
+    /*
+      Total loan amount
+    */
+    if (
+      msg.includes('total loan') ||
+      msg.includes('loan amount') ||
+      msg.includes('borrowed')
     ) {
-      reply = `You currently have ₹${outstandingAmount.toLocaleString(
-        'en-IN'
-      )} outstanding across ${loanCount} loan(s).`;
+      return res.json({
+        reply:
+          `Your total recorded principal loan amount is ₹${data.totalLoanAmount.toLocaleString('en-IN')}.`
+      });
     }
 
-    // ====================================
-    // TOTAL LOAN
-    // ====================================
 
-    else if (
-      message.includes('total loan') ||
-      message.includes('loan amount')
+    /*
+      Outstanding balance
+    */
+    if (
+      msg.includes('outstanding') ||
+      msg.includes('remaining') ||
+      msg.includes('left to pay')
     ) {
-      reply = `Your total original loan amount is ₹${totalLoan.toLocaleString(
-        'en-IN'
-      )}.`;
+      return res.json({
+        reply:
+          `Your current outstanding loan balance is approximately ₹${data.outstandingAmount.toLocaleString('en-IN')}.`
+      });
     }
 
-    // ====================================
-    // UTILIZATION
-    // ====================================
 
-    else if (
-      message.includes('utilization') ||
-      message.includes('used')
+    /*
+      Repaid amount
+    */
+    if (
+      msg.includes('repaid') ||
+      msg.includes('paid so far') ||
+      msg.includes('how much have i paid')
     ) {
-      reply = `Your current outstanding loan utilization is ${utilization.toFixed(
-        1
-      )}%. You have ₹${outstandingAmount.toLocaleString(
-        'en-IN'
-      )} outstanding from an original ₹${totalLoan.toLocaleString(
-        'en-IN'
-      )}.`;
+      return res.json({
+        reply:
+          `Based on your loan balances, you have repaid approximately ₹${Math.max(
+            data.totalLoanAmount - data.outstandingAmount,
+            0
+          ).toLocaleString('en-IN')} of the original principal.`
+      });
     }
 
-    // ====================================
-    // REPAYMENT PROGRESS
-    // ====================================
 
-    else if (
-      message.includes('repaid') ||
-      message.includes('paid') ||
-      message.includes('progress')
+    /*
+      Monthly EMI
+    */
+    if (
+      msg.includes('emi') ||
+      msg.includes('monthly payment') ||
+      msg.includes('monthly installment')
     ) {
-      reply = `You have repaid approximately ₹${repaidAmount.toLocaleString(
-        'en-IN'
-      )}. Your repayment progress is ${repaymentProgress.toFixed(
-        1
-      )}%.`;
+      return res.json({
+        reply:
+          `Your combined monthly EMI is approximately ₹${data.totalMonthlyEMI.toLocaleString('en-IN')}.`
+      });
     }
 
-    // ====================================
-    // EMI
-    // ====================================
 
-    else if (
-      message.includes('emi') ||
-      message.includes('monthly payment')
+    /*
+      Next EMI
+    */
+    if (
+      msg.includes('next emi') ||
+      msg.includes('emi date') ||
+      msg.includes('due date') ||
+      msg.includes('when should i pay')
     ) {
-      reply = `Your combined monthly EMI is approximately ₹${totalMonthlyEMI.toLocaleString(
-        'en-IN'
-      )}. Make sure the required funds are available before your EMI due dates.`;
-    }
+      const nextLoan = [...data.loans]
+        .filter(loan => loan.status === 'active')
+        .sort(
+          (a, b) =>
+            new Date(a.nextEmiDate) - new Date(b.nextEmiDate)
+        )[0];
 
-    // ====================================
-    // NEXT PAYMENT
-    // ====================================
-
-    else if (
-      message.includes('next') &&
-      (
-        message.includes('payment') ||
-        message.includes('emi') ||
-        message.includes('due')
-      )
-    ) {
-      if (nextLoan) {
-        const nextDate = new Date(
-          nextLoan.nextEmiDate
-        ).toLocaleDateString('en-IN');
-
-        reply = `Your next recorded EMI is for ${
-          nextLoan.lenderName ||
-          'your loan'
-        } and is due on ${nextDate}.`;
-      } else {
-        reply =
-          'I could not find an upcoming EMI date in your loan records.';
+      if (!nextLoan) {
+        return res.json({
+          reply: 'There is no active loan with a scheduled EMI.'
+        });
       }
+
+      return res.json({
+        reply:
+          `Your next EMI is for ${nextLoan.lenderName}. ` +
+          `The scheduled date is ${new Date(
+            nextLoan.nextEmiDate
+          ).toLocaleDateString('en-IN')} ` +
+          `and the EMI amount is approximately ₹${Number(
+            nextLoan.emiAmount
+          ).toLocaleString('en-IN')}.`
+      });
     }
 
-    // ====================================
-    // NUMBER OF LOANS
-    // ====================================
 
-    else if (
-      message.includes('how many') &&
-      message.includes('loan')
+    /*
+      Interest
+    */
+    if (
+      msg.includes('interest') ||
+      msg.includes('highest interest')
     ) {
-      reply = `You currently have ${loanCount} loan(s) recorded in your account.`;
+      const highestInterestLoan = [...data.loans].sort(
+        (a, b) =>
+          Number(b.interestRate) - Number(a.interestRate)
+      )[0];
+
+      return res.json({
+        reply:
+          `Your highest-interest recorded loan is with ${highestInterestLoan.lenderName}. ` +
+          `Its interest rate is ${highestInterestLoan.interestRate}%.`
+      });
     }
 
-    // ====================================
-    // EXPENSE / SPENDING
-    // ====================================
 
-    else if (
-      message.includes('expense') ||
-      message.includes('spending') ||
-      message.includes('spend')
+    /*
+      Payment history
+    */
+    if (
+      msg.includes('payment history') ||
+      msg.includes('payments') ||
+      msg.includes('repayment history')
     ) {
-      reply =
-        'Your current loan records track loan and repayment information. To analyze exactly how much of each loan was spent, the application will need a separate expense or transaction tracking feature.';
+      return res.json({
+        reply:
+          `You have recorded ${data.repayments.length} repayment(s). ` +
+          `${data.onTimePayments} were marked on time and ` +
+          `${data.latePayments} were marked late.`
+      });
     }
 
-    // ====================================
-    // GENERIC EMI ADVICE
-    // ====================================
 
-    else if (
-      message.includes('advice') ||
-      message.includes('strategy') ||
-      message.includes('what should')
+    /*
+      Interest paid
+    */
+    if (
+      msg.includes('interest paid') ||
+      msg.includes('how much interest')
     ) {
-      reply = `You currently have ₹${outstandingAmount.toLocaleString(
-        'en-IN'
-      )} outstanding, with approximately ₹${totalMonthlyEMI.toLocaleString(
-        'en-IN'
-      )} in combined monthly EMIs. Focus on timely EMI payments and monitor your repayment progress.`;
+      return res.json({
+        reply:
+          `Your recorded repayments contain approximately ₹${data.totalInterestPaid.toLocaleString('en-IN')} in interest payments.`
+      });
     }
 
-    // ====================================
-    // DEFAULT
-    // ====================================
 
-    else {
-      reply =
-        'I can answer questions about your total loan, outstanding balance, repayment progress, utilization, EMI and upcoming payments. Try asking: "How much loan do I have remaining?"';
+    /*
+      Repayment progress
+    */
+    if (
+      msg.includes('progress') ||
+      msg.includes('repaid percentage') ||
+      msg.includes('repayment percentage')
+    ) {
+      return res.json({
+        reply:
+          `Your repayment progress is approximately ${Math.max(
+            0,
+            Math.min(100, data.repaymentRate)
+          ).toFixed(1)}% based on your original principal and current outstanding balance.`
+      });
     }
 
-    res.json({
-      reply,
 
-      data: {
-        loanCount,
-        totalLoan,
-        outstandingAmount,
-        repaidAmount,
-        utilization: Number(
-          utilization.toFixed(2)
-        ),
-        repaymentProgress: Number(
-          repaymentProgress.toFixed(2)
-        ),
-        totalMonthlyEMI,
-      },
+    /*
+      Avalanche strategy
+    */
+    if (
+      msg.includes('avalanche') ||
+      msg.includes('pay first') ||
+      msg.includes('which loan')
+    ) {
+      const activeLoans = data.loans.filter(
+        loan => loan.status === 'active'
+      );
+
+      if (activeLoans.length === 0) {
+        return res.json({
+          reply: 'You currently have no active loans.'
+        });
+      }
+
+      const highestInterestLoan = [...activeLoans].sort(
+        (a, b) =>
+          Number(b.interestRate) - Number(a.interestRate)
+      )[0];
+
+      return res.json({
+        reply:
+          `For an interest-focused repayment strategy, the loan with the highest ` +
+          `interest rate is ${highestInterestLoan.lenderName} at ` +
+          `${highestInterestLoan.interestRate}%.`
+      });
+    }
+
+
+    /*
+      Credit score
+    */
+    if (
+      msg.includes('credit score') ||
+      msg.includes('credit')
+    ) {
+      return res.json({
+        reply:
+          `Your tracker currently records repayment behavior rather than your actual credit score. ` +
+          `You have ${data.onTimePayments} on-time payment(s) and ` +
+          `${data.latePayments} late payment(s). Paying EMIs on time can help maintain good repayment history.`
+      });
+    }
+
+
+    /*
+      General fallback
+    */
+    return res.json({
+      reply:
+        `I can help you with your loan data. Try asking: ` +
+        `"How much have I repaid?", ` +
+        `"How much is outstanding?", ` +
+        `"What is my EMI?", ` +
+        `"When is my next EMI?", ` +
+        `"Which loan has the highest interest?", or ` +
+        `"Show my payment history."`
     });
+
   } catch (err) {
-    console.error(
-      'AI chat error:',
-      err
-    );
+    console.error('AI chat error:', err);
 
     res.status(500).json({
-      message:
-        'Error processing AI chat',
+      message: 'Error processing chat'
     });
   }
 };
