@@ -1,44 +1,143 @@
-```jsx
 import React, { useEffect, useState } from 'react';
 import API from '../api/axios';
 
 const AIAdvisor = () => {
   const [strategy, setStrategy] = useState('');
   const [loading, setLoading] = useState(false);
+
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
 
-  // Demo loan data for now.
-  // Later we will connect this to your real Loans/Transactions data.
-  const totalLoan = 200000;
-  const usedAmount = 135000;
-  const remainingAmount = totalLoan - usedAmount;
-  const utilization = (usedAmount / totalLoan) * 100;
+  const [loans, setLoans] = useState([]);
+  const [loanLoading, setLoanLoading] = useState(true);
+  const [loanError, setLoanError] = useState('');
+
+  // =========================
+  // FETCH REAL LOAN DATA
+  // =========================
+
+  useEffect(() => {
+    fetchLoans();
+  }, []);
+
+  const fetchLoans = async () => {
+    try {
+      setLoanLoading(true);
+      setLoanError('');
+
+      const res = await API.get('/api/loans');
+
+      setLoans(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Error fetching loans:', err);
+
+      setLoanError(
+        err.response?.data?.message ||
+          'Unable to load your loan data.'
+      );
+
+      setLoans([]);
+    } finally {
+      setLoanLoading(false);
+    }
+  };
+
+  // =========================
+  // CALCULATE LOAN SUMMARY
+  // =========================
+
+  const totalLoan = loans.reduce(
+    (sum, loan) =>
+      sum + Number(loan.principalAmount || 0),
+    0
+  );
+
+  const outstandingAmount = loans.reduce(
+    (sum, loan) =>
+      sum + Number(loan.outstandingBalance || 0),
+    0
+  );
+
+  const repaidAmount = Math.max(
+    totalLoan - outstandingAmount,
+    0
+  );
+
+  /*
+    Here utilization means:
+    outstanding loan / original loan
+
+    Example:
+    Original = ₹2,00,000
+    Outstanding = ₹1,35,000
+
+    Utilization = 67.5%
+  */
+
+  const utilization =
+    totalLoan > 0
+      ? (outstandingAmount / totalLoan) * 100
+      : 0;
+
+  const repaymentProgress =
+    totalLoan > 0
+      ? (repaidAmount / totalLoan) * 100
+      : 0;
+
+  const totalMonthlyEMI = loans.reduce(
+    (sum, loan) =>
+      sum + Number(loan.emiAmount || 0),
+    0
+  );
+
+  // Find next EMI
+  const nextLoan = [...loans]
+    .filter((loan) => loan.nextEmiDate)
+    .sort(
+      (a, b) =>
+        new Date(a.nextEmiDate) -
+        new Date(b.nextEmiDate)
+    )[0];
+
+  const utilizationWidth = Math.min(
+    Math.max(utilization, 0),
+    100
+  );
+
+  // =========================
+  // AI STRATEGY
+  // =========================
 
   const fetchStrategy = async () => {
     setLoading(true);
 
     try {
-      const res = await axios.get(
-        'http://localhost:8000/api/ai/strategy'
-      );
+      const res = await API.get('/api/ai/strategy');
 
       setStrategy(
         res.data.strategy ||
-          'Review your loan utilization and keep enough funds reserved for upcoming payments.'
+          'Review your loan repayment progress and keep enough funds reserved for upcoming EMIs.'
       );
     } catch (err) {
+      console.error('Strategy error:', err);
+
       setStrategy(
-        `Your loan utilization is ${utilization.toFixed(
-          1
-        )}%. You have ₹${remainingAmount.toLocaleString(
+        `You currently have ₹${outstandingAmount.toLocaleString(
           'en-IN'
-        )} remaining. Track your expenses carefully and keep your upcoming EMI amount reserved.`
+        )} outstanding across ${
+          loans.length
+        } loan(s). Your repayment progress is ${repaymentProgress.toFixed(
+          1
+        )}%. Keep upcoming EMI funds reserved and review your repayment plan regularly.`
       );
     } finally {
       setLoading(false);
     }
   };
+
+  // =========================
+  // CHAT
+  // =========================
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -47,14 +146,17 @@ const AIAdvisor = () => {
 
     setMessages((prev) => [
       ...prev,
-      { text: userMsg, sender: 'user' },
+      {
+        text: userMsg,
+        sender: 'user',
+      },
     ]);
 
     setInput('');
 
     try {
-      const res = await axios.post(
-        'http://localhost:8000/api/ai/chat',
+      const res = await API.post(
+        '/api/ai/chat',
         {
           message: userMsg,
         }
@@ -70,71 +172,132 @@ const AIAdvisor = () => {
         },
       ]);
     } catch (err) {
-      let reply =
-        'I can help you understand your loan utilization, spending and remaining balance.';
+      console.error('Chat error:', err);
 
       const question = userMsg.toLowerCase();
 
+      let reply =
+        'I can help you understand your loan balance, repayment progress and EMI information.';
+
+      // Remaining / outstanding
       if (
         question.includes('remaining') ||
+        question.includes('outstanding') ||
         question.includes('left')
       ) {
-        reply = `You currently have approximately ₹${remainingAmount.toLocaleString(
+        reply = `You currently have ₹${outstandingAmount.toLocaleString(
           'en-IN'
-        )} remaining from your ₹${totalLoan.toLocaleString(
-          'en-IN'
-        )} loan.`;
-      } else if (
+        )} outstanding across ${
+          loans.length
+        } loan(s).`;
+      }
+
+      // Utilization
+      else if (
         question.includes('utilization') ||
         question.includes('used')
       ) {
-        reply = `Your current loan utilization is ${utilization.toFixed(
+        reply = `Your current outstanding loan utilization is ${utilization.toFixed(
           1
-        )}%. You have used ₹${usedAmount.toLocaleString(
+        )}%. You have ₹${outstandingAmount.toLocaleString(
           'en-IN'
-        )} out of ₹${totalLoan.toLocaleString('en-IN')}.`;
-      } else if (
+        )} outstanding from an original loan amount of ₹${totalLoan.toLocaleString(
+          'en-IN'
+        )}.`;
+      }
+
+      // Repayment progress
+      else if (
+        question.includes('repaid') ||
+        question.includes('progress') ||
+        question.includes('paid')
+      ) {
+        reply = `You have repaid approximately ₹${repaidAmount.toLocaleString(
+          'en-IN'
+        )}, which is ${repaymentProgress.toFixed(
+          1
+        )}% of your original loan amount.`;
+      }
+
+      // EMI
+      else if (
+        question.includes('emi') ||
+        question.includes('payment')
+      ) {
+        reply = `Your total monthly EMI across your current loans is approximately ₹${totalMonthlyEMI.toLocaleString(
+          'en-IN'
+        )}. Keep the required EMI amount available before the due dates.`;
+      }
+
+      // Loan count
+      else if (
+        question.includes('how many') ||
+        question.includes('number of loan') ||
+        question.includes('loans')
+      ) {
+        reply = `You currently have ${loans.length} loan(s) recorded in your account.`;
+      }
+
+      // Next EMI
+      else if (
+        question.includes('next') &&
+        question.includes('due')
+      ) {
+        if (nextLoan) {
+          reply = `Your next recorded EMI is for ${
+            nextLoan.lenderName || 'your loan'
+          } on ${new Date(
+            nextLoan.nextEmiDate
+          ).toLocaleDateString('en-IN')}.`;
+        } else {
+          reply =
+            'I could not find a recorded upcoming EMI date.';
+        }
+      }
+
+      // Expense
+      else if (
         question.includes('spend') ||
         question.includes('expense')
       ) {
         reply =
-          'Try to record every loan-related expense and compare actual spending with your planned loan purpose.';
-      } else if (
-        question.includes('emi') ||
-        question.includes('payment')
-      ) {
-        reply =
-          'Keep your upcoming EMI amount available before making additional discretionary spending.';
+          'Try recording every loan-related expense and compare your actual spending with the original purpose of the loan.';
       }
 
       setMessages((prev) => [
         ...prev,
-        { text: reply, sender: 'bot' },
+        {
+          text: reply,
+          sender: 'bot',
+        },
       ]);
     }
   };
+
+  // =========================
+  // QUICK QUESTIONS
+  // =========================
 
   const askQuickQuestion = (question) => {
     setInput(question);
 
     setTimeout(() => {
-      const fakeEvent = {
-        preventDefault: () => {},
-      };
-
-      handleQuickSend(question, fakeEvent);
+      handleQuickSend(question);
     }, 0);
   };
 
   const handleQuickSend = async (question) => {
     setMessages((prev) => [
       ...prev,
-      { text: question, sender: 'user' },
+      {
+        text: question,
+        sender: 'user',
+      },
     ]);
 
     try {
-      const res = await axios.post(
-        'http://localhost:8000/api/ai/chat',
+      const res = await API.post(
+        '/api/ai/chat',
         {
           message: question,
         }
@@ -150,30 +313,72 @@ const AIAdvisor = () => {
         },
       ]);
     } catch (err) {
-      let reply =
-        'Your loan data is being analyzed. Keep tracking your expenses regularly.';
+      console.error('Quick chat error:', err);
 
-      if (question.includes('remaining')) {
-        reply = `You have ₹${remainingAmount.toLocaleString(
+      let reply =
+        'Your loan data is being analyzed.';
+
+      if (
+        question
+          .toLowerCase()
+          .includes('remaining')
+      ) {
+        reply = `You have ₹${outstandingAmount.toLocaleString(
           'en-IN'
-        )} remaining from your loan.`;
-      } else if (question.includes('utilization')) {
-        reply = `Your loan utilization is ${utilization.toFixed(
+        )} outstanding.`;
+      } else if (
+        question
+          .toLowerCase()
+          .includes('utilization')
+      ) {
+        reply = `Your current outstanding loan utilization is ${utilization.toFixed(
           1
         )}%.`;
-      } else if (question.includes('EMI')) {
-        reply =
-          'Keep enough funds reserved for your upcoming EMI payments.';
+      } else if (
+        question
+          .toLowerCase()
+          .includes('emi')
+      ) {
+        reply = `Your total monthly EMI is approximately ₹${totalMonthlyEMI.toLocaleString(
+          'en-IN'
+        )}.`;
       }
 
       setMessages((prev) => [
         ...prev,
-        { text: reply, sender: 'bot' },
+        {
+          text: reply,
+          sender: 'bot',
+        },
       ]);
     }
   };
 
-  const utilizationWidth = Math.min(utilization, 100);
+  // =========================
+  // LOADING SCREEN
+  // =========================
+
+  if (loanLoading) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#f8fafc',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          color: '#475569',
+          fontSize: '18px',
+        }}
+      >
+        🤖 Loading your loan data...
+      </div>
+    );
+  }
+
+  // =========================
+  // MAIN UI
+  // =========================
 
   return (
     <div
@@ -189,7 +394,9 @@ const AIAdvisor = () => {
           margin: '0 auto',
         }}
       >
+
         {/* HEADER */}
+
         <div style={{ marginBottom: '28px' }}>
           <div
             style={{
@@ -222,12 +429,48 @@ const AIAdvisor = () => {
               marginTop: '8px',
             }}
           >
-            Understand your loan utilization and get
-            personalized financial guidance.
+            Understand your loan repayment and
+            get personalized financial guidance.
           </p>
         </div>
 
+        {/* ERROR */}
+
+        {loanError && (
+          <div
+            style={{
+              background: '#fef2f2',
+              color: '#991b1b',
+              border: '1px solid #fecaca',
+              padding: '14px',
+              borderRadius: '10px',
+              marginBottom: '20px',
+            }}
+          >
+            ⚠️ {loanError}
+          </div>
+        )}
+
+        {/* NO LOANS */}
+
+        {!loanError && loans.length === 0 && (
+          <div
+            style={{
+              background: '#fff7ed',
+              color: '#9a3412',
+              border: '1px solid #fed7aa',
+              padding: '16px',
+              borderRadius: '12px',
+              marginBottom: '20px',
+            }}
+          >
+            💡 No loans found yet. Add a loan from
+            the Loans page to start using the AI Advisor.
+          </div>
+        )}
+
         {/* SUMMARY CARDS */}
+
         <div
           style={{
             display: 'grid',
@@ -237,14 +480,10 @@ const AIAdvisor = () => {
             marginBottom: '22px',
           }}
         >
-          <div
-            style={{
-              background: '#ffffff',
-              padding: '22px',
-              borderRadius: '16px',
-              border: '1px solid #e2e8f0',
-            }}
-          >
+
+          {/* TOTAL */}
+
+          <div style={cardStyle}>
             <div style={{ color: '#64748b' }}>
               Total Loan
             </div>
@@ -261,16 +500,11 @@ const AIAdvisor = () => {
             </div>
           </div>
 
-          <div
-            style={{
-              background: '#ffffff',
-              padding: '22px',
-              borderRadius: '16px',
-              border: '1px solid #e2e8f0',
-            }}
-          >
+          {/* OUTSTANDING */}
+
+          <div style={cardStyle}>
             <div style={{ color: '#64748b' }}>
-              Amount Used
+              Outstanding
             </div>
 
             <div
@@ -281,20 +515,17 @@ const AIAdvisor = () => {
                 color: '#2563eb',
               }}
             >
-              ₹{usedAmount.toLocaleString('en-IN')}
+              ₹{outstandingAmount.toLocaleString(
+                'en-IN'
+              )}
             </div>
           </div>
 
-          <div
-            style={{
-              background: '#ffffff',
-              padding: '22px',
-              borderRadius: '16px',
-              border: '1px solid #e2e8f0',
-            }}
-          >
+          {/* REPAID */}
+
+          <div style={cardStyle}>
             <div style={{ color: '#64748b' }}>
-              Remaining
+              Amount Repaid
             </div>
 
             <div
@@ -305,12 +536,34 @@ const AIAdvisor = () => {
                 color: '#059669',
               }}
             >
-              ₹{remainingAmount.toLocaleString('en-IN')}
+              ₹{repaidAmount.toLocaleString('en-IN')}
+            </div>
+          </div>
+
+          {/* EMI */}
+
+          <div style={cardStyle}>
+            <div style={{ color: '#64748b' }}>
+              Monthly EMI
+            </div>
+
+            <div
+              style={{
+                fontSize: '27px',
+                fontWeight: '800',
+                marginTop: '8px',
+                color: '#7c3aed',
+              }}
+            >
+              ₹{totalMonthlyEMI.toLocaleString(
+                'en-IN'
+              )}
             </div>
           </div>
         </div>
 
         {/* UTILIZATION */}
+
         <div
           style={{
             background: '#ffffff',
@@ -335,7 +588,7 @@ const AIAdvisor = () => {
                   color: '#0f172a',
                 }}
               >
-                📊 Loan Utilization
+                📊 Outstanding Loan Utilization
               </h3>
 
               <p
@@ -345,7 +598,8 @@ const AIAdvisor = () => {
                   fontSize: '14px',
                 }}
               >
-                Amount of your loan currently utilized
+                Outstanding balance compared with
+                original loan amount
               </p>
             </div>
 
@@ -378,9 +632,23 @@ const AIAdvisor = () => {
               }}
             />
           </div>
+
+          <div
+            style={{
+              marginTop: '10px',
+              color: '#64748b',
+              fontSize: '13px',
+            }}
+          >
+            Repayment progress:{' '}
+            <strong>
+              {repaymentProgress.toFixed(1)}%
+            </strong>
+          </div>
         </div>
 
         {/* MAIN GRID */}
+
         <div
           style={{
             display: 'grid',
@@ -389,7 +657,9 @@ const AIAdvisor = () => {
             gap: '22px',
           }}
         >
+
           {/* AI INSIGHT */}
+
           <div
             style={{
               background: '#ffffff',
@@ -417,15 +687,22 @@ const AIAdvisor = () => {
                 lineHeight: '1.6',
               }}
             >
-              Your current utilization is{' '}
+              You have{' '}
               <strong>
-                {utilization.toFixed(1)}%
-              </strong>
-              . You have{' '}
-              <strong>
-                ₹{remainingAmount.toLocaleString('en-IN')}
+                ₹{outstandingAmount.toLocaleString(
+                  'en-IN'
+                )}
               </strong>{' '}
-              remaining from your loan.
+              outstanding across{' '}
+              <strong>{loans.length}</strong>{' '}
+              loan(s).
+
+              <br />
+
+              Your repayment progress is{' '}
+              <strong>
+                {repaymentProgress.toFixed(1)}%
+              </strong>.
             </div>
 
             <button
@@ -474,13 +751,26 @@ const AIAdvisor = () => {
                 Smart Suggestions
               </h4>
 
-              <p>✓ Track every loan-related expense</p>
-              <p>✓ Keep upcoming EMI funds reserved</p>
-              <p>✓ Review spending regularly</p>
+              <p>
+                ✓ Track every loan-related expense
+              </p>
+
+              <p>
+                ✓ Keep upcoming EMI funds reserved
+              </p>
+
+              <p>
+                ✓ Review repayment progress regularly
+              </p>
+
+              <p>
+                ✓ Avoid missing EMI due dates
+              </p>
             </div>
           </div>
 
           {/* CHAT */}
+
           <div
             style={{
               background: '#ffffff',
@@ -507,11 +797,12 @@ const AIAdvisor = () => {
                 fontSize: '14px',
               }}
             >
-              Ask questions about your loan,
-              utilization or expenses.
+              Ask questions about your loans,
+              repayment or EMI.
             </p>
 
             {/* MESSAGES */}
+
             <div
               style={{
                 flex: 1,
@@ -566,6 +857,7 @@ const AIAdvisor = () => {
             </div>
 
             {/* QUICK QUESTIONS */}
+
             <div
               style={{
                 display: 'flex',
@@ -606,9 +898,21 @@ const AIAdvisor = () => {
               >
                 📅 EMI Advice
               </button>
+
+              <button
+                onClick={() =>
+                  askQuickQuestion(
+                    'How much have I repaid?'
+                  )
+                }
+                style={quickButton}
+              >
+                💳 Repaid
+              </button>
             </div>
 
             {/* INPUT */}
+
             <div
               style={{
                 display: 'flex',
@@ -658,6 +962,21 @@ const AIAdvisor = () => {
   );
 };
 
+// =========================
+// REUSABLE CARD STYLE
+// =========================
+
+const cardStyle = {
+  background: '#ffffff',
+  padding: '22px',
+  borderRadius: '16px',
+  border: '1px solid #e2e8f0',
+};
+
+// =========================
+// QUICK BUTTON STYLE
+// =========================
+
 const quickButton = {
   background: '#f8fafc',
   color: '#334155',
@@ -670,4 +989,3 @@ const quickButton = {
 };
 
 export default AIAdvisor;
-```
