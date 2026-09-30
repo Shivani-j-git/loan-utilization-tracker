@@ -1,991 +1,871 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import API from '../api/axios';
 
-const AIAdvisor = () => {
-  const [strategy, setStrategy] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-
+export default function AIAdvisor() {
   const [loans, setLoans] = useState([]);
-  const [loanLoading, setLoanLoading] = useState(true);
-  const [loanError, setLoanError] = useState('');
+  const [strategy, setStrategy] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [strategyLoading, setStrategyLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  // =========================
-  // FETCH REAL LOAN DATA
-  // =========================
+  const [message, setMessage] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
 
-  useEffect(() => {
-    fetchLoans();
-  }, []);
+  const [messages, setMessages] = useState([
+    {
+      sender: 'ai',
+      text: 'Hello! 👋 I can analyze your loan data and help you understand your repayment plan.'
+    }
+  ]);
 
+  // --------------------------------------------------
+  // Fetch user's loans
+  // --------------------------------------------------
   const fetchLoans = async () => {
     try {
-      setLoanLoading(true);
-      setLoanError('');
+      setLoading(true);
+      setError('');
 
-      const res = await API.get('/api/loans');
+      const response = await API.get('/api/loans');
 
-      setLoans(Array.isArray(res.data) ? res.data : []);
+      setLoans(Array.isArray(response.data) ? response.data : []);
     } catch (err) {
-      console.error('Error fetching loans:', err);
+      console.error('Error loading loans:', err);
 
-      setLoanError(
+      setError(
         err.response?.data?.message ||
-          'Unable to load your loan data.'
+        'Unable to load your loan data.'
       );
 
       setLoans([]);
-    } finally {
-      setLoanLoading(false);
-    }
-  };
-
-  // =========================
-  // CALCULATE LOAN SUMMARY
-  // =========================
-
-  const totalLoan = loans.reduce(
-    (sum, loan) =>
-      sum + Number(loan.principalAmount || 0),
-    0
-  );
-
-  const outstandingAmount = loans.reduce(
-    (sum, loan) =>
-      sum + Number(loan.outstandingBalance || 0),
-    0
-  );
-
-  const repaidAmount = Math.max(
-    totalLoan - outstandingAmount,
-    0
-  );
-
-  /*
-    Here utilization means:
-    outstanding loan / original loan
-
-    Example:
-    Original = ₹2,00,000
-    Outstanding = ₹1,35,000
-
-    Utilization = 67.5%
-  */
-
-  const utilization =
-    totalLoan > 0
-      ? (outstandingAmount / totalLoan) * 100
-      : 0;
-
-  const repaymentProgress =
-    totalLoan > 0
-      ? (repaidAmount / totalLoan) * 100
-      : 0;
-
-  const totalMonthlyEMI = loans.reduce(
-    (sum, loan) =>
-      sum + Number(loan.emiAmount || 0),
-    0
-  );
-
-  // Find next EMI
-  const nextLoan = [...loans]
-    .filter((loan) => loan.nextEmiDate)
-    .sort(
-      (a, b) =>
-        new Date(a.nextEmiDate) -
-        new Date(b.nextEmiDate)
-    )[0];
-
-  const utilizationWidth = Math.min(
-    Math.max(utilization, 0),
-    100
-  );
-
-  // =========================
-  // AI STRATEGY
-  // =========================
-
-  const fetchStrategy = async () => {
-    setLoading(true);
-
-    try {
-      const res = await API.get('/api/ai/strategy');
-
-      setStrategy(
-        res.data.strategy ||
-          'Review your loan repayment progress and keep enough funds reserved for upcoming EMIs.'
-      );
-    } catch (err) {
-      console.error('Strategy error:', err);
-
-      setStrategy(
-        `You currently have ₹${outstandingAmount.toLocaleString(
-          'en-IN'
-        )} outstanding across ${
-          loans.length
-        } loan(s). Your repayment progress is ${repaymentProgress.toFixed(
-          1
-        )}%. Keep upcoming EMI funds reserved and review your repayment plan regularly.`
-      );
     } finally {
       setLoading(false);
     }
   };
 
-  // =========================
-  // CHAT
-  // =========================
+  // --------------------------------------------------
+  // Fetch AI strategy
+  // --------------------------------------------------
+  const fetchStrategy = async () => {
+    try {
+      setStrategyLoading(true);
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+      const response = await API.get('/api/ai/strategy');
 
-    const userMsg = input.trim();
+      setStrategy(
+        response.data?.strategy ||
+        'No repayment strategy is available yet.'
+      );
+    } catch (err) {
+      console.error('Error loading AI strategy:', err);
 
-    setMessages((prev) => [
+      setStrategy(
+        'Unable to generate your repayment strategy right now.'
+      );
+    } finally {
+      setStrategyLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLoans();
+    fetchStrategy();
+  }, []);
+
+  // --------------------------------------------------
+  // Dynamic calculations
+  // --------------------------------------------------
+  const summary = useMemo(() => {
+    const totalLoan = loans.reduce(
+      (sum, loan) =>
+        sum + Number(loan.principalAmount || 0),
+      0
+    );
+
+    const outstandingAmount = loans.reduce(
+      (sum, loan) =>
+        sum + Number(loan.outstandingBalance || 0),
+      0
+    );
+
+    const totalMonthlyEMI = loans.reduce(
+      (sum, loan) =>
+        sum + Number(loan.emiAmount || 0),
+      0
+    );
+
+    const repaidAmount = Math.max(
+      totalLoan - outstandingAmount,
+      0
+    );
+
+    const repaymentProgress =
+      totalLoan > 0
+        ? (repaidAmount / totalLoan) * 100
+        : 0;
+
+    const outstandingUtilization =
+      totalLoan > 0
+        ? (outstandingAmount / totalLoan) * 100
+        : 0;
+
+    const activeLoans = loans.filter(
+      loan => loan.status === 'active'
+    );
+
+    const nextLoan = [...activeLoans]
+      .filter(loan => loan.nextEmiDate)
+      .sort(
+        (a, b) =>
+          new Date(a.nextEmiDate) -
+          new Date(b.nextEmiDate)
+      )[0];
+
+    const averageHealth =
+      loans.length > 0
+        ? loans.reduce(
+            (sum, loan) =>
+              sum +
+              Number(loan.utilizationScore ?? 100),
+            0
+          ) / loans.length
+        : 0;
+
+    return {
+      totalLoan,
+      outstandingAmount,
+      totalMonthlyEMI,
+      repaidAmount,
+      repaymentProgress,
+      outstandingUtilization,
+      activeLoans,
+      nextLoan,
+      averageHealth
+    };
+  }, [loans]);
+
+  // --------------------------------------------------
+  // Currency formatter
+  // --------------------------------------------------
+  const formatCurrency = value => {
+    return `₹${Number(value || 0).toLocaleString('en-IN', {
+      maximumFractionDigits: 0
+    })}`;
+  };
+
+  // --------------------------------------------------
+  // Date formatter
+  // --------------------------------------------------
+  const formatDate = date => {
+    if (!date) return 'Not available';
+
+    return new Date(date).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
+  // --------------------------------------------------
+  // Send chat message
+  // --------------------------------------------------
+  const sendMessage = async text => {
+    const question = (text || message).trim();
+
+    if (!question || chatLoading) return;
+
+    setMessages(prev => [
       ...prev,
       {
-        text: userMsg,
         sender: 'user',
-      },
+        text: question
+      }
     ]);
 
-    setInput('');
+    setMessage('');
+    setChatLoading(true);
 
     try {
-      const res = await API.post(
-        '/api/ai/chat',
-        {
-          message: userMsg,
-        }
-      );
+      const response = await API.post('/api/ai/chat', {
+        message: question
+      });
 
-      setMessages((prev) => [
+      setMessages(prev => [
         ...prev,
         {
+          sender: 'ai',
           text:
-            res.data.reply ||
-            'I could not generate a response right now.',
-          sender: 'bot',
-        },
+            response.data?.reply ||
+            'I could not generate a response.'
+        }
       ]);
     } catch (err) {
       console.error('Chat error:', err);
 
-      const question = userMsg.toLowerCase();
-
-      let reply =
-        'I can help you understand your loan balance, repayment progress and EMI information.';
-
-      // Remaining / outstanding
-      if (
-        question.includes('remaining') ||
-        question.includes('outstanding') ||
-        question.includes('left')
-      ) {
-        reply = `You currently have ₹${outstandingAmount.toLocaleString(
-          'en-IN'
-        )} outstanding across ${
-          loans.length
-        } loan(s).`;
-      }
-
-      // Utilization
-      else if (
-        question.includes('utilization') ||
-        question.includes('used')
-      ) {
-        reply = `Your current outstanding loan utilization is ${utilization.toFixed(
-          1
-        )}%. You have ₹${outstandingAmount.toLocaleString(
-          'en-IN'
-        )} outstanding from an original loan amount of ₹${totalLoan.toLocaleString(
-          'en-IN'
-        )}.`;
-      }
-
-      // Repayment progress
-      else if (
-        question.includes('repaid') ||
-        question.includes('progress') ||
-        question.includes('paid')
-      ) {
-        reply = `You have repaid approximately ₹${repaidAmount.toLocaleString(
-          'en-IN'
-        )}, which is ${repaymentProgress.toFixed(
-          1
-        )}% of your original loan amount.`;
-      }
-
-      // EMI
-      else if (
-        question.includes('emi') ||
-        question.includes('payment')
-      ) {
-        reply = `Your total monthly EMI across your current loans is approximately ₹${totalMonthlyEMI.toLocaleString(
-          'en-IN'
-        )}. Keep the required EMI amount available before the due dates.`;
-      }
-
-      // Loan count
-      else if (
-        question.includes('how many') ||
-        question.includes('number of loan') ||
-        question.includes('loans')
-      ) {
-        reply = `You currently have ${loans.length} loan(s) recorded in your account.`;
-      }
-
-      // Next EMI
-      else if (
-        question.includes('next') &&
-        question.includes('due')
-      ) {
-        if (nextLoan) {
-          reply = `Your next recorded EMI is for ${
-            nextLoan.lenderName || 'your loan'
-          } on ${new Date(
-            nextLoan.nextEmiDate
-          ).toLocaleDateString('en-IN')}.`;
-        } else {
-          reply =
-            'I could not find a recorded upcoming EMI date.';
-        }
-      }
-
-      // Expense
-      else if (
-        question.includes('spend') ||
-        question.includes('expense')
-      ) {
-        reply =
-          'Try recording every loan-related expense and compare your actual spending with the original purpose of the loan.';
-      }
-
-      setMessages((prev) => [
+      setMessages(prev => [
         ...prev,
         {
-          text: reply,
-          sender: 'bot',
-        },
-      ]);
-    }
-  };
-
-  // =========================
-  // QUICK QUESTIONS
-  // =========================
-
-  const askQuickQuestion = (question) => {
-    setInput(question);
-
-    setTimeout(() => {
-      handleQuickSend(question);
-    }, 0);
-  };
-
-  const handleQuickSend = async (question) => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        text: question,
-        sender: 'user',
-      },
-    ]);
-
-    try {
-      const res = await API.post(
-        '/api/ai/chat',
-        {
-          message: question,
-        }
-      );
-
-      setMessages((prev) => [
-        ...prev,
-        {
+          sender: 'ai',
           text:
-            res.data.reply ||
-            'I could not generate a response right now.',
-          sender: 'bot',
-        },
+            err.response?.data?.message ||
+            'Sorry, I could not process your question right now.'
+        }
       ]);
-    } catch (err) {
-      console.error('Quick chat error:', err);
-
-      let reply =
-        'Your loan data is being analyzed.';
-
-      if (
-        question
-          .toLowerCase()
-          .includes('remaining')
-      ) {
-        reply = `You have ₹${outstandingAmount.toLocaleString(
-          'en-IN'
-        )} outstanding.`;
-      } else if (
-        question
-          .toLowerCase()
-          .includes('utilization')
-      ) {
-        reply = `Your current outstanding loan utilization is ${utilization.toFixed(
-          1
-        )}%.`;
-      } else if (
-        question
-          .toLowerCase()
-          .includes('emi')
-      ) {
-        reply = `Your total monthly EMI is approximately ₹${totalMonthlyEMI.toLocaleString(
-          'en-IN'
-        )}.`;
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          text: reply,
-          sender: 'bot',
-        },
-      ]);
+    } finally {
+      setChatLoading(false);
     }
   };
 
-  // =========================
-  // LOADING SCREEN
-  // =========================
+  const handleSubmit = e => {
+    e.preventDefault();
+    sendMessage();
+  };
 
-  if (loanLoading) {
+  // --------------------------------------------------
+  // Quick questions
+  // --------------------------------------------------
+  const quickQuestions = [
+    'How much have I repaid?',
+    'How much is outstanding?',
+    'What is my monthly EMI?',
+    'When is my next EMI?',
+    'Which loan has the highest interest?',
+    'Show my payment history.'
+  ];
+
+  // --------------------------------------------------
+  // Loading state
+  // --------------------------------------------------
+  if (loading) {
     return (
-      <div
-        style={{
-          minHeight: '100vh',
-          background: '#f8fafc',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          color: '#475569',
-          fontSize: '18px',
-        }}
-      >
-        🤖 Loading your loan data...
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="animate-pulse">
+            <div className="h-8 w-64 bg-gray-200 rounded mb-3"></div>
+            <div className="h-4 w-96 bg-gray-200 rounded mb-8"></div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+              {[1, 2, 3, 4].map(item => (
+                <div
+                  key={item}
+                  className="h-32 bg-white rounded-xl shadow-sm"
+                ></div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
 
-  // =========================
-  // MAIN UI
-  // =========================
+  // --------------------------------------------------
+  // Error state
+  // --------------------------------------------------
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+            <h2 className="text-xl font-bold text-red-700 mb-2">
+              Unable to load AI Advisor
+            </h2>
 
-  return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: '#f8fafc',
-        padding: '30px',
-      }}
-    >
-      <div
-        style={{
-          maxWidth: '1150px',
-          margin: '0 auto',
-        }}
-      >
-
-        {/* HEADER */}
-
-        <div style={{ marginBottom: '28px' }}>
-          <div
-            style={{
-              display: 'inline-block',
-              background: '#dbeafe',
-              color: '#1d4ed8',
-              padding: '6px 12px',
-              borderRadius: '20px',
-              fontSize: '13px',
-              fontWeight: '700',
-              marginBottom: '10px',
-            }}
-          >
-            AI POWERED
-          </div>
-
-          <h1
-            style={{
-              margin: 0,
-              fontSize: '32px',
-              color: '#0f172a',
-            }}
-          >
-            🤖 AI Loan Advisor
-          </h1>
-
-          <p
-            style={{
-              color: '#64748b',
-              marginTop: '8px',
-            }}
-          >
-            Understand your loan repayment and
-            get personalized financial guidance.
-          </p>
-        </div>
-
-        {/* ERROR */}
-
-        {loanError && (
-          <div
-            style={{
-              background: '#fef2f2',
-              color: '#991b1b',
-              border: '1px solid #fecaca',
-              padding: '14px',
-              borderRadius: '10px',
-              marginBottom: '20px',
-            }}
-          >
-            ⚠️ {loanError}
-          </div>
-        )}
-
-        {/* NO LOANS */}
-
-        {!loanError && loans.length === 0 && (
-          <div
-            style={{
-              background: '#fff7ed',
-              color: '#9a3412',
-              border: '1px solid #fed7aa',
-              padding: '16px',
-              borderRadius: '12px',
-              marginBottom: '20px',
-            }}
-          >
-            💡 No loans found yet. Add a loan from
-            the Loans page to start using the AI Advisor.
-          </div>
-        )}
-
-        {/* SUMMARY CARDS */}
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns:
-              'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: '18px',
-            marginBottom: '22px',
-          }}
-        >
-
-          {/* TOTAL */}
-
-          <div style={cardStyle}>
-            <div style={{ color: '#64748b' }}>
-              Total Loan
-            </div>
-
-            <div
-              style={{
-                fontSize: '27px',
-                fontWeight: '800',
-                marginTop: '8px',
-                color: '#0f172a',
-              }}
-            >
-              ₹{totalLoan.toLocaleString('en-IN')}
-            </div>
-          </div>
-
-          {/* OUTSTANDING */}
-
-          <div style={cardStyle}>
-            <div style={{ color: '#64748b' }}>
-              Outstanding
-            </div>
-
-            <div
-              style={{
-                fontSize: '27px',
-                fontWeight: '800',
-                marginTop: '8px',
-                color: '#2563eb',
-              }}
-            >
-              ₹{outstandingAmount.toLocaleString(
-                'en-IN'
-              )}
-            </div>
-          </div>
-
-          {/* REPAID */}
-
-          <div style={cardStyle}>
-            <div style={{ color: '#64748b' }}>
-              Amount Repaid
-            </div>
-
-            <div
-              style={{
-                fontSize: '27px',
-                fontWeight: '800',
-                marginTop: '8px',
-                color: '#059669',
-              }}
-            >
-              ₹{repaidAmount.toLocaleString('en-IN')}
-            </div>
-          </div>
-
-          {/* EMI */}
-
-          <div style={cardStyle}>
-            <div style={{ color: '#64748b' }}>
-              Monthly EMI
-            </div>
-
-            <div
-              style={{
-                fontSize: '27px',
-                fontWeight: '800',
-                marginTop: '8px',
-                color: '#7c3aed',
-              }}
-            >
-              ₹{totalMonthlyEMI.toLocaleString(
-                'en-IN'
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* UTILIZATION */}
-
-        <div
-          style={{
-            background: '#ffffff',
-            padding: '24px',
-            borderRadius: '16px',
-            border: '1px solid #e2e8f0',
-            marginBottom: '22px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '12px',
-            }}
-          >
-            <div>
-              <h3
-                style={{
-                  margin: 0,
-                  color: '#0f172a',
-                }}
-              >
-                📊 Outstanding Loan Utilization
-              </h3>
-
-              <p
-                style={{
-                  margin: '5px 0 0',
-                  color: '#64748b',
-                  fontSize: '14px',
-                }}
-              >
-                Outstanding balance compared with
-                original loan amount
-              </p>
-            </div>
-
-            <strong
-              style={{
-                fontSize: '24px',
-                color: '#2563eb',
-              }}
-            >
-              {utilization.toFixed(1)}%
-            </strong>
-          </div>
-
-          <div
-            style={{
-              height: '14px',
-              background: '#e2e8f0',
-              borderRadius: '20px',
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                width: `${utilizationWidth}%`,
-                height: '100%',
-                background:
-                  'linear-gradient(90deg, #2563eb, #3b82f6)',
-                borderRadius: '20px',
-                transition: 'width 0.5s ease',
-              }}
-            />
-          </div>
-
-          <div
-            style={{
-              marginTop: '10px',
-              color: '#64748b',
-              fontSize: '13px',
-            }}
-          >
-            Repayment progress:{' '}
-            <strong>
-              {repaymentProgress.toFixed(1)}%
-            </strong>
-          </div>
-        </div>
-
-        {/* MAIN GRID */}
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns:
-              'repeat(auto-fit, minmax(320px, 1fr))',
-            gap: '22px',
-          }}
-        >
-
-          {/* AI INSIGHT */}
-
-          <div
-            style={{
-              background: '#ffffff',
-              padding: '24px',
-              borderRadius: '16px',
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <h3
-              style={{
-                marginTop: 0,
-                color: '#0f172a',
-              }}
-            >
-              💡 AI Insight
-            </h3>
-
-            <div
-              style={{
-                background: '#eff6ff',
-                border: '1px solid #bfdbfe',
-                borderRadius: '12px',
-                padding: '16px',
-                color: '#1e3a8a',
-                lineHeight: '1.6',
-              }}
-            >
-              You have{' '}
-              <strong>
-                ₹{outstandingAmount.toLocaleString(
-                  'en-IN'
-                )}
-              </strong>{' '}
-              outstanding across{' '}
-              <strong>{loans.length}</strong>{' '}
-              loan(s).
-
-              <br />
-
-              Your repayment progress is{' '}
-              <strong>
-                {repaymentProgress.toFixed(1)}%
-              </strong>.
-            </div>
-
-            <button
-              onClick={fetchStrategy}
-              disabled={loading}
-              style={{
-                width: '100%',
-                marginTop: '18px',
-                padding: '13px',
-                background: loading
-                  ? '#94a3b8'
-                  : '#2563eb',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '10px',
-                cursor: loading
-                  ? 'not-allowed'
-                  : 'pointer',
-                fontWeight: '700',
-                fontSize: '15px',
-              }}
-            >
-              {loading
-                ? 'Analyzing...'
-                : '🚀 Get AI Strategy'}
-            </button>
-
-            {strategy && (
-              <div
-                style={{
-                  marginTop: '16px',
-                  padding: '15px',
-                  background: '#f0fdf4',
-                  border: '1px solid #bbf7d0',
-                  borderRadius: '10px',
-                  color: '#166534',
-                  lineHeight: '1.6',
-                }}
-              >
-                {strategy}
-              </div>
-            )}
-
-            <div style={{ marginTop: '22px' }}>
-              <h4 style={{ color: '#334155' }}>
-                Smart Suggestions
-              </h4>
-
-              <p>
-                ✓ Track every loan-related expense
-              </p>
-
-              <p>
-                ✓ Keep upcoming EMI funds reserved
-              </p>
-
-              <p>
-                ✓ Review repayment progress regularly
-              </p>
-
-              <p>
-                ✓ Avoid missing EMI due dates
-              </p>
-            </div>
-          </div>
-
-          {/* CHAT */}
-
-          <div
-            style={{
-              background: '#ffffff',
-              padding: '24px',
-              borderRadius: '16px',
-              border: '1px solid #e2e8f0',
-              display: 'flex',
-              flexDirection: 'column',
-              minHeight: '520px',
-            }}
-          >
-            <h3
-              style={{
-                marginTop: 0,
-                color: '#0f172a',
-              }}
-            >
-              💬 Ask Your AI Advisor
-            </h3>
-
-            <p
-              style={{
-                color: '#64748b',
-                fontSize: '14px',
-              }}
-            >
-              Ask questions about your loans,
-              repayment or EMI.
+            <p className="text-red-600 mb-4">
+              {error}
             </p>
 
-            {/* MESSAGES */}
-
-            <div
-              style={{
-                flex: 1,
-                overflowY: 'auto',
-                margin: '15px 0',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '10px',
-                minHeight: '200px',
+            <button
+              onClick={() => {
+                fetchLoans();
+                fetchStrategy();
               }}
+              className="px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
             >
-              {messages.length === 0 && (
-                <div
-                  style={{
-                    background: '#f8fafc',
-                    padding: '18px',
-                    borderRadius: '12px',
-                    color: '#64748b',
-                    textAlign: 'center',
-                  }}
-                >
-                  👋 Hello! Ask me something about
-                  your loan.
-                </div>
-              )}
-
-              {messages.map((m, i) => (
-                <div
-                  key={i}
-                  style={{
-                    alignSelf:
-                      m.sender === 'user'
-                        ? 'flex-end'
-                        : 'flex-start',
-                    background:
-                      m.sender === 'user'
-                        ? '#1e3a8a'
-                        : '#f1f5f9',
-                    color:
-                      m.sender === 'user'
-                        ? '#ffffff'
-                        : '#0f172a',
-                    padding: '11px 14px',
-                    borderRadius: '14px',
-                    maxWidth: '82%',
-                    lineHeight: '1.5',
-                  }}
-                >
-                  {m.text}
-                </div>
-              ))}
-            </div>
-
-            {/* QUICK QUESTIONS */}
-
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: '8px',
-                marginBottom: '12px',
-              }}
-            >
-              <button
-                onClick={() =>
-                  askQuickQuestion(
-                    'How much loan do I have remaining?'
-                  )
-                }
-                style={quickButton}
-              >
-                💰 Remaining
-              </button>
-
-              <button
-                onClick={() =>
-                  askQuickQuestion(
-                    'What is my loan utilization?'
-                  )
-                }
-                style={quickButton}
-              >
-                📊 Utilization
-              </button>
-
-              <button
-                onClick={() =>
-                  askQuickQuestion(
-                    'Give me EMI advice'
-                  )
-                }
-                style={quickButton}
-              >
-                📅 EMI Advice
-              </button>
-
-              <button
-                onClick={() =>
-                  askQuickQuestion(
-                    'How much have I repaid?'
-                  )
-                }
-                style={quickButton}
-              >
-                💳 Repaid
-              </button>
-            </div>
-
-            {/* INPUT */}
-
-            <div
-              style={{
-                display: 'flex',
-                gap: '8px',
-              }}
-            >
-              <input
-                value={input}
-                onChange={(e) =>
-                  setInput(e.target.value)
-                }
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleSend();
-                  }
-                }}
-                placeholder="Ask about your loans..."
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  borderRadius: '10px',
-                  border: '1px solid #cbd5e1',
-                  outline: 'none',
-                  fontSize: '14px',
-                }}
-              />
-
-              <button
-                onClick={handleSend}
-                style={{
-                  background: '#2563eb',
-                  color: '#ffffff',
-                  padding: '10px 18px',
-                  border: 'none',
-                  borderRadius: '10px',
-                  cursor: 'pointer',
-                  fontWeight: '700',
-                }}
-              >
-                Send
-              </button>
-            </div>
+              Try Again
+            </button>
           </div>
         </div>
       </div>
+    );
+  }
+
+  // --------------------------------------------------
+  // Main page
+  // --------------------------------------------------
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 md:p-6">
+
+      <div className="max-w-7xl mx-auto">
+
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">
+                AI Financial Advisor 🤖
+              </h1>
+
+              <p className="text-gray-500 mt-1">
+                Personalized insights based on your actual loan data
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                fetchLoans();
+                fetchStrategy();
+              }}
+              className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              🔄 Refresh Data
+            </button>
+
+          </div>
+        </div>
+
+
+        {/* No loans */}
+        {loans.length === 0 ? (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 text-center mb-8">
+
+            <div className="text-5xl mb-4">
+              💰
+            </div>
+
+            <h2 className="text-2xl font-bold text-gray-800 mb-2">
+              No Loans Found
+            </h2>
+
+            <p className="text-gray-500">
+              Add a loan from the Loans page to unlock personalized AI insights.
+            </p>
+
+          </div>
+        ) : (
+
+          <>
+            {/* Summary Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
+
+              {/* Total Loan */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">
+                      Total Loan
+                    </p>
+
+                    <h2 className="text-2xl font-bold text-gray-900 mt-1">
+                      {formatCurrency(summary.totalLoan)}
+                    </h2>
+                  </div>
+
+                  <div className="text-3xl">
+                    💰
+                  </div>
+                </div>
+              </div>
+
+
+              {/* Outstanding */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">
+                      Outstanding
+                    </p>
+
+                    <h2 className="text-2xl font-bold text-orange-600 mt-1">
+                      {formatCurrency(summary.outstandingAmount)}
+                    </h2>
+                  </div>
+
+                  <div className="text-3xl">
+                    📊
+                  </div>
+                </div>
+              </div>
+
+
+              {/* Monthly EMI */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">
+                      Monthly EMI
+                    </p>
+
+                    <h2 className="text-2xl font-bold text-blue-600 mt-1">
+                      {formatCurrency(summary.totalMonthlyEMI)}
+                    </h2>
+                  </div>
+
+                  <div className="text-3xl">
+                    📅
+                  </div>
+                </div>
+              </div>
+
+
+              {/* Repayment Progress */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-500">
+                      Repaid
+                    </p>
+
+                    <h2 className="text-2xl font-bold text-green-600 mt-1">
+                      {summary.repaymentProgress.toFixed(1)}%
+                    </h2>
+                  </div>
+
+                  <div className="text-3xl">
+                    ✅
+                  </div>
+                </div>
+
+                <div className="mt-3 w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-green-500 h-2 rounded-full transition-all duration-500"
+                    style={{
+                      width: `${Math.min(
+                        summary.repaymentProgress,
+                        100
+                      )}%`
+                    }}
+                  ></div>
+                </div>
+
+              </div>
+
+            </div>
+
+
+            {/* Two-column section */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+
+              {/* AI Strategy */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-11 h-11 rounded-xl bg-blue-100 flex items-center justify-center text-2xl">
+                    🤖
+                  </div>
+
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">
+                      AI Strategy
+                    </h2>
+
+                    <p className="text-sm text-gray-500">
+                      Based on your current loan portfolio
+                    </p>
+                  </div>
+                </div>
+
+                {strategyLoading ? (
+                  <div className="space-y-3">
+                    <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    <div className="h-4 bg-gray-200 rounded animate-pulse"></div>
+                    <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4"></div>
+                  </div>
+                ) : (
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                    <p className="text-gray-700 leading-relaxed">
+                      {strategy}
+                    </p>
+                  </div>
+                )}
+
+              </div>
+
+
+              {/* Next EMI */}
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+
+                <h2 className="text-xl font-bold text-gray-900 mb-5">
+                  📅 Next EMI
+                </h2>
+
+                {summary.nextLoan ? (
+                  <div>
+
+                    <div className="flex justify-between items-center mb-4">
+                      <div>
+                        <p className="text-sm text-gray-500">
+                          Lender
+                        </p>
+
+                        <p className="text-lg font-bold text-gray-900">
+                          {summary.nextLoan.lenderName}
+                        </p>
+                      </div>
+
+                      <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm capitalize">
+                        {summary.nextLoan.loanType}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+
+                      <div className="bg-gray-50 rounded-xl p-4">
+                        <p className="text-xs text-gray-500">
+                          EMI Amount
+                        </p>
+
+                        <p className="text-lg font-bold text-blue-600">
+                          {formatCurrency(
+                            summary.nextLoan.emiAmount
+                          )}
+                        </p>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-xl p-4">
+                        <p className="text-xs text-gray-500">
+                          Due Date
+                        </p>
+
+                        <p className="text-lg font-bold text-gray-800">
+                          {formatDate(
+                            summary.nextLoan.nextEmiDate
+                          )}
+                        </p>
+                      </div>
+
+                    </div>
+
+                  </div>
+                ) : (
+                  <p className="text-gray-500">
+                    No upcoming EMI found.
+                  </p>
+                )}
+
+              </div>
+
+            </div>
+
+
+            {/* Repayment Progress */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
+
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    Repayment Progress
+                  </h2>
+
+                  <p className="text-sm text-gray-500">
+                    Amount repaid compared with original principal
+                  </p>
+                </div>
+
+                <span className="text-lg font-bold text-green-600">
+                  {formatCurrency(summary.repaidAmount)}
+                </span>
+              </div>
+
+              <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
+
+                <div
+                  className="bg-green-500 h-4 rounded-full transition-all duration-700"
+                  style={{
+                    width: `${Math.min(
+                      summary.repaymentProgress,
+                      100
+                    )}%`
+                  }}
+                ></div>
+
+              </div>
+
+              <div className="flex justify-between mt-2 text-sm text-gray-500">
+                <span>
+                  0%
+                </span>
+
+                <span>
+                  {summary.repaymentProgress.toFixed(1)}%
+                </span>
+
+                <span>
+                  100%
+                </span>
+              </div>
+
+            </div>
+
+
+            {/* Loan Health */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
+
+              <h2 className="text-xl font-bold text-gray-900 mb-5">
+                📈 Loan Health
+              </h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <p className="text-sm text-gray-500">
+                    Active Loans
+                  </p>
+
+                  <p className="text-3xl font-bold text-gray-900 mt-1">
+                    {summary.activeLoans.length}
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <p className="text-sm text-gray-500">
+                    Outstanding Utilization
+                  </p>
+
+                  <p className="text-3xl font-bold text-orange-600 mt-1">
+                    {summary.outstandingUtilization.toFixed(1)}%
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-5">
+                  <p className="text-sm text-gray-500">
+                    Repayment Health
+                  </p>
+
+                  <p className="text-3xl font-bold text-blue-600 mt-1">
+                    {summary.averageHealth.toFixed(0)}/100
+                  </p>
+                </div>
+
+              </div>
+
+            </div>
+
+
+            {/* Loan Details */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
+
+              <h2 className="text-xl font-bold text-gray-900 mb-5">
+                💳 Your Loans
+              </h2>
+
+              <div className="overflow-x-auto">
+
+                <table className="w-full text-left">
+
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="pb-3 text-sm text-gray-500">
+                        Lender
+                      </th>
+
+                      <th className="pb-3 text-sm text-gray-500">
+                        Type
+                      </th>
+
+                      <th className="pb-3 text-sm text-gray-500">
+                        Principal
+                      </th>
+
+                      <th className="pb-3 text-sm text-gray-500">
+                        Outstanding
+                      </th>
+
+                      <th className="pb-3 text-sm text-gray-500">
+                        Interest
+                      </th>
+
+                      <th className="pb-3 text-sm text-gray-500">
+                        EMI
+                      </th>
+
+                      <th className="pb-3 text-sm text-gray-500">
+                        Health
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+
+                    {loans.map(loan => (
+                      <tr
+                        key={loan._id}
+                        className="border-b border-gray-100"
+                      >
+
+                        <td className="py-4 font-medium text-gray-900">
+                          {loan.lenderName}
+                        </td>
+
+                        <td className="py-4 capitalize text-gray-600">
+                          {loan.loanType}
+                        </td>
+
+                        <td className="py-4 text-gray-700">
+                          {formatCurrency(
+                            loan.principalAmount
+                          )}
+                        </td>
+
+                        <td className="py-4 font-medium text-orange-600">
+                          {formatCurrency(
+                            loan.outstandingBalance
+                          )}
+                        </td>
+
+                        <td className="py-4 text-gray-700">
+                          {loan.interestRate}%
+                        </td>
+
+                        <td className="py-4 text-blue-600 font-medium">
+                          {formatCurrency(
+                            loan.emiAmount
+                          )}
+                        </td>
+
+                        <td className="py-4">
+
+                          <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
+                            {Number(
+                              loan.utilizationScore ?? 100
+                            ).toFixed(0)}
+                          </span>
+
+                        </td>
+
+                      </tr>
+                    ))}
+
+                  </tbody>
+
+                </table>
+
+              </div>
+
+            </div>
+
+
+            {/* Chat */}
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+
+              <div className="p-6 border-b border-gray-200">
+
+                <h2 className="text-xl font-bold text-gray-900">
+                  💬 Ask Your AI Advisor
+                </h2>
+
+                <p className="text-sm text-gray-500 mt-1">
+                  Ask questions about your actual loan data
+                </p>
+
+              </div>
+
+
+              {/* Messages */}
+              <div className="p-6 max-h-96 overflow-y-auto space-y-4">
+
+                {messages.map((item, index) => (
+
+                  <div
+                    key={index}
+                    className={`flex ${
+                      item.sender === 'user'
+                        ? 'justify-end'
+                        : 'justify-start'
+                    }`}
+                  >
+
+                    <div
+                      className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                        item.sender === 'user'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}
+                    >
+                      {item.text}
+                    </div>
+
+                  </div>
+
+                ))}
+
+                {chatLoading && (
+                  <div className="flex justify-start">
+
+                    <div className="bg-gray-100 px-4 py-3 rounded-2xl text-gray-500">
+                      AI is analyzing your data...
+                    </div>
+
+                  </div>
+                )}
+
+              </div>
+
+
+              {/* Quick Questions */}
+              <div className="px-6 pb-4">
+
+                <p className="text-sm text-gray-500 mb-2">
+                  Quick questions:
+                </p>
+
+                <div className="flex flex-wrap gap-2">
+
+                  {quickQuestions.map(question => (
+
+                    <button
+                      key={question}
+                      onClick={() => sendMessage(question)}
+                      disabled={chatLoading}
+                      className="px-3 py-2 text-sm bg-gray-100 hover:bg-blue-100 hover:text-blue-700 rounded-lg transition disabled:opacity-50"
+                    >
+                      {question}
+                    </button>
+
+                  ))}
+
+                </div>
+
+              </div>
+
+
+              {/* Input */}
+              <form
+                onSubmit={handleSubmit}
+                className="p-6 border-t border-gray-200"
+              >
+
+                <div className="flex gap-3">
+
+                  <input
+                    type="text"
+                    value={message}
+                    onChange={e => setMessage(e.target.value)}
+                    placeholder="Ask about your loans..."
+                    disabled={chatLoading}
+                    className="flex-1 border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={!message.trim() || chatLoading}
+                    className="px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {chatLoading ? '...' : 'Send'}
+                  </button>
+
+                </div>
+
+              </form>
+
+            </div>
+
+          </>
+        )}
+
+      </div>
+
     </div>
   );
-};
-
-// =========================
-// REUSABLE CARD STYLE
-// =========================
-
-const cardStyle = {
-  background: '#ffffff',
-  padding: '22px',
-  borderRadius: '16px',
-  border: '1px solid #e2e8f0',
-};
-
-// =========================
-// QUICK BUTTON STYLE
-// =========================
-
-const quickButton = {
-  background: '#f8fafc',
-  color: '#334155',
-  border: '1px solid #cbd5e1',
-  borderRadius: '20px',
-  padding: '7px 12px',
-  cursor: 'pointer',
-  fontSize: '12px',
-  fontWeight: '600',
-};
-
-export default AIAdvisor;
+}
