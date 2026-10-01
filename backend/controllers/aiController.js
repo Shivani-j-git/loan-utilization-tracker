@@ -1,155 +1,99 @@
-```js
 const Loan = require('../models/Loan');
 const Repayment = require('../models/Repayment');
 
-/*
-  Get complete financial data for logged-in user
-*/
-const getUserFinancialData = async (userId) => {
-  const loans = await Loan.find({ userId }).sort({ nextEmiDate: 1 });
+// Get user's financial data
+async function getUserFinancialData(userId) {
+  const loans = await Loan.find({ userId });
 
-  const repayments = await Repayment.find({ userId })
-    .sort({ paymentDate: -1 });
+  const repayments = await Repayment.find({ userId });
 
-  const totalLoanAmount = loans.reduce(
-    (sum, loan) => sum + Number(loan.principalAmount || 0),
+  const totalLoan = loans.reduce(
+    (sum, loan) => sum + (loan.principalAmount || 0),
     0
   );
 
   const outstandingAmount = loans.reduce(
-    (sum, loan) => sum + Number(loan.outstandingBalance || 0),
+    (sum, loan) => sum + (loan.outstandingBalance || 0),
     0
   );
 
-  const totalMonthlyEMI = loans.reduce(
-    (sum, loan) => sum + Number(loan.emiAmount || 0),
+  const totalEMI = loans.reduce(
+    (sum, loan) => sum + (loan.emiAmount || 0),
+    0
+  );
+
+  const totalRepaid = repayments.reduce(
+    (sum, payment) => sum + (payment.amountPaid || 0),
     0
   );
 
   const totalInterestPaid = repayments.reduce(
-    (sum, repayment) =>
-      sum + Number(repayment.interestComponent || 0),
+    (sum, payment) => sum + (payment.interestComponent || 0),
     0
   );
-
-  const onTimePayments = repayments.filter(
-    repayment => repayment.isOnTime === true
-  ).length;
-
-  const latePayments = repayments.filter(
-    repayment => repayment.isOnTime === false
-  ).length;
-
-  const repaidAmount = Math.max(
-    totalLoanAmount - outstandingAmount,
-    0
-  );
-
-  const repaymentProgress =
-    totalLoanAmount > 0
-      ? (repaidAmount / totalLoanAmount) * 100
-      : 0;
 
   return {
     loans,
     repayments,
-    totalLoanAmount,
+    totalLoan,
     outstandingAmount,
-    totalMonthlyEMI,
-    totalInterestPaid,
-    onTimePayments,
-    latePayments,
-    repaidAmount,
-    repaymentProgress
+    totalEMI,
+    totalRepaid,
+    totalInterestPaid
   };
-};
+}
 
 
-/*
-  AI REPAYMENT STRATEGY
-*/
+// ===============================
+// AI REPAYMENT STRATEGY
+// ===============================
+
 exports.getStrategy = async (req, res) => {
   try {
-    const userId = req.user.id;
-
-    const data = await getUserFinancialData(userId);
+    const data = await getUserFinancialData(req.user.id);
 
     if (data.loans.length === 0) {
       return res.json({
-        strategy:
-          'You do not have any loans recorded yet. Add a loan to receive personalized repayment guidance.'
+        strategy: 'You currently have no loans. Add a loan to receive a personalized repayment strategy.'
       });
     }
 
-    const activeLoans = data.loans.filter(
-      loan => loan.status === 'active'
-    );
-
-    if (activeLoans.length === 0) {
-      return res.json({
-        strategy:
-          'You currently have no active loans. Keep your repayment records updated.'
-      });
-    }
-
-    const highestInterestLoan = [...activeLoans].sort(
-      (a, b) =>
-        Number(b.interestRate) - Number(a.interestRate)
+    const highestInterestLoan = [...data.loans].sort(
+      (a, b) => b.interestRate - a.interestRate
     )[0];
 
-    return res.json({
+    res.json({
       strategy:
-        `Focus on paying off your highest-interest loan first using the ` +
-        `Avalanche method. Your highest-interest active loan is ` +
-        `${highestInterestLoan.lenderName} at ` +
-        `${highestInterestLoan.interestRate}%. ` +
-        `Your current outstanding balance across active loans is ` +
-        `₹${data.outstandingAmount.toLocaleString('en-IN')}.`
+        `You have ${data.loans.length} active loan(s). ` +
+        `Your total outstanding balance is approximately ₹${data.outstandingAmount.toLocaleString('en-IN')}. ` +
+        `Consider prioritizing "${highestInterestLoan.lenderName}" because it has the highest interest rate of ${highestInterestLoan.interestRate}%. ` +
+        `This follows the Avalanche repayment method, which can reduce total interest over time.`
     });
 
-  } catch (error) {
-    console.error('AI strategy error:', error);
+  } catch (err) {
+    console.error('AI Strategy Error:', err);
 
     res.status(500).json({
-      message: 'Error generating repayment strategy'
+      message: 'Error generating strategy'
     });
   }
 };
 
 
-/*
-  AI CHAT
-*/
+// ===============================
+// AI CHAT
+// ===============================
+
 exports.chat = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const msg = (req.body.message || '').toLowerCase().trim();
 
-    const message = (req.body.message || '').trim();
+    const data = await getUserFinancialData(req.user.id);
 
-    if (!message) {
-      return res.status(400).json({
-        message: 'Please enter a question.'
-      });
-    }
-
-    const msg = message.toLowerCase();
-
-    const data = await getUserFinancialData(userId);
-
-    /*
-      No loans
-    */
-    if (data.loans.length === 0) {
-      return res.json({
-        reply:
-          'You do not have any loans recorded yet. Add your loan details first and I can analyze them for you.'
-      });
-    }
+    let reply;
 
 
-    /*
-      GREETING
-    */
+    // Greeting
     if (
       msg === 'hi' ||
       msg === 'hello' ||
@@ -157,19 +101,85 @@ exports.chat = async (req, res) => {
       msg.includes('good morning') ||
       msg.includes('good evening')
     ) {
-      return res.json({
-        reply:
-          `Hello! 👋 You currently have ${data.loans.length} loan(s). ` +
-          `Your outstanding balance is ₹${data.outstandingAmount.toLocaleString('en-IN')}. ` +
-          `Ask me about your EMI, outstanding balance, repayment progress, interest or loan strategy.`
-      });
+      reply =
+        'Hello! 👋 I can help you understand your loans, EMI, outstanding balance, repayments, interest and repayment strategy.';
     }
 
 
-    /*
-      WHAT HAPPENS IF I REPAY?
-    */
-    if (
+    // Outstanding balance
+    else if (
+      msg.includes('outstanding') ||
+      msg.includes('remaining balance') ||
+      msg.includes('balance left')
+    ) {
+      reply =
+        `Your current outstanding loan balance is approximately ₹${data.outstandingAmount.toLocaleString('en-IN')}.`;
+    }
+
+
+    // Total loan
+    else if (
+      msg.includes('total loan') ||
+      msg.includes('loan amount')
+    ) {
+      reply =
+        `Your total original loan amount is approximately ₹${data.totalLoan.toLocaleString('en-IN')}.`;
+    }
+
+
+    // Repaid amount
+    else if (
+      msg.includes('how much have i repaid') ||
+      msg.includes('how much repaid') ||
+      msg.includes('total repaid') ||
+      msg.includes('amount repaid')
+    ) {
+      reply =
+        `You have repaid approximately ₹${data.totalRepaid.toLocaleString('en-IN')} so far.`;
+    }
+
+
+    // EMI
+    else if (
+      msg.includes('emi') ||
+      msg.includes('monthly payment')
+    ) {
+      reply =
+        `Your combined monthly EMI is approximately ₹${data.totalEMI.toLocaleString('en-IN')}.`;
+    }
+
+
+    // Interest paid
+    else if (
+      msg.includes('interest paid') ||
+      msg.includes('how much interest')
+    ) {
+      reply =
+        `Based on recorded repayments, you have paid approximately ₹${data.totalInterestPaid.toLocaleString('en-IN')} in interest.`;
+    }
+
+
+    // Highest interest loan
+    else if (
+      msg.includes('highest interest') ||
+      msg.includes('which loan has the highest interest')
+    ) {
+      if (data.loans.length === 0) {
+        reply = 'You currently have no loans.';
+      } else {
+        const highestInterestLoan = [...data.loans].sort(
+          (a, b) => b.interestRate - a.interestRate
+        )[0];
+
+        reply =
+          `Your highest-interest loan is with ${highestInterestLoan.lenderName}, ` +
+          `with an interest rate of ${highestInterestLoan.interestRate}%.`;
+      }
+    }
+
+
+    // What happens if I repay?
+    else if (
       msg.includes('what will happen if i repay') ||
       msg.includes('what happens if i repay') ||
       msg.includes('if i repay') ||
@@ -177,279 +187,121 @@ exports.chat = async (req, res) => {
       msg.includes('repay the loan') ||
       msg.includes('pay off my loan')
     ) {
-      return res.json({
-        reply:
-          `If you repay your loan, your outstanding balance will decrease. ` +
-          `If you completely repay the remaining balance, the loan can eventually be marked as closed. ` +
-          `Your repayment history will also record the payment. ` +
-          `Your current outstanding balance is approximately ₹${data.outstandingAmount.toLocaleString('en-IN')}.`
-      });
+      reply =
+        `If you make a repayment, your outstanding balance will decrease. ` +
+        `The payment will also be recorded in your repayment history. ` +
+        `If you completely repay the remaining balance, the loan can eventually be marked as closed. ` +
+        `Your current outstanding balance is approximately ₹${data.outstandingAmount.toLocaleString('en-IN')}.`;
     }
 
 
-    /*
-      OUTSTANDING
-    */
-    if (
-      msg.includes('outstanding') ||
-      msg.includes('remaining') ||
-      msg.includes('left to pay')
-    ) {
-      return res.json({
-        reply:
-          `Your current outstanding balance is approximately ` +
-          `₹${data.outstandingAmount.toLocaleString('en-IN')}.`
-      });
-    }
-
-
-    /*
-      TOTAL LOAN
-    */
-    if (
-      msg.includes('total loan') ||
-      msg.includes('loan amount') ||
-      msg.includes('borrowed')
-    ) {
-      return res.json({
-        reply:
-          `Your total recorded principal loan amount is ` +
-          `₹${data.totalLoanAmount.toLocaleString('en-IN')}.`
-      });
-    }
-
-
-    /*
-      REPAID
-    */
-    if (
-      msg.includes('repaid') ||
-      msg.includes('paid so far') ||
+    // Repayment progress
+    else if (
+      msg.includes('progress') ||
       msg.includes('how much have i paid')
     ) {
-      return res.json({
-        reply:
-          `You have repaid approximately ` +
-          `₹${data.repaidAmount.toLocaleString('en-IN')} ` +
-          `of your original principal.`
-      });
+      const progress =
+        data.totalLoan > 0
+          ? ((data.totalLoan - data.outstandingAmount) / data.totalLoan) * 100
+          : 0;
+
+      reply =
+        `Your repayment progress is approximately ${Math.max(
+          0,
+          Math.min(100, progress)
+        ).toFixed(1)}%.`;
     }
 
 
-    /*
-      EMI
-    */
-    if (
-      msg.includes('emi') ||
-      msg.includes('monthly payment') ||
-      msg.includes('monthly installment')
-    ) {
-      return res.json({
-        reply:
-          `Your combined monthly EMI is approximately ` +
-          `₹${data.totalMonthlyEMI.toLocaleString('en-IN')}.`
-      });
-    }
-
-
-    /*
-      NEXT EMI
-    */
-    if (
+    // Next EMI
+    else if (
       msg.includes('next emi') ||
-      msg.includes('emi date') ||
-      msg.includes('due date') ||
-      msg.includes('when should i pay')
+      msg.includes('when is my emi') ||
+      msg.includes('emi date')
     ) {
-      const activeLoans = data.loans.filter(
-        loan => loan.status === 'active'
-      );
+      if (data.loans.length === 0) {
+        reply = 'You currently have no loans.';
+      } else {
+        const nextLoan = [...data.loans]
+          .filter(loan => loan.nextEmiDate)
+          .sort(
+            (a, b) =>
+              new Date(a.nextEmiDate) - new Date(b.nextEmiDate)
+          )[0];
 
-      if (activeLoans.length === 0) {
-        return res.json({
-          reply: 'You currently have no active loans with a scheduled EMI.'
-        });
+        if (nextLoan) {
+          reply =
+            `Your next EMI for ${nextLoan.lenderName} is scheduled around ` +
+            `${new Date(nextLoan.nextEmiDate).toLocaleDateString('en-IN')}.`;
+        } else {
+          reply = 'I could not find a next EMI date in your loan data.';
+        }
       }
-
-      const nextLoan = [...activeLoans].sort(
-        (a, b) =>
-          new Date(a.nextEmiDate) -
-          new Date(b.nextEmiDate)
-      )[0];
-
-      return res.json({
-        reply:
-          `Your next EMI is for ${nextLoan.lenderName}. ` +
-          `The scheduled date is ` +
-          `${new Date(nextLoan.nextEmiDate).toLocaleDateString('en-IN')} ` +
-          `and the EMI amount is approximately ` +
-          `₹${Number(nextLoan.emiAmount).toLocaleString('en-IN')}.`
-      });
     }
 
 
-    /*
-      HIGHEST INTEREST
-    */
-    if (
-      msg.includes('interest') ||
-      msg.includes('highest interest')
-    ) {
-      const highestInterestLoan = [...data.loans].sort(
-        (a, b) =>
-          Number(b.interestRate) -
-          Number(a.interestRate)
-      )[0];
-
-      return res.json({
-        reply:
-          `Your highest-interest loan is with ` +
-          `${highestInterestLoan.lenderName}. ` +
-          `Its interest rate is ${highestInterestLoan.interestRate}%.`
-      });
-    }
-
-
-    /*
-      REPAYMENT PROGRESS
-    */
-    if (
-      msg.includes('progress') ||
-      msg.includes('percentage') ||
-      msg.includes('how much is repaid')
-    ) {
-      return res.json({
-        reply:
-          `Your repayment progress is approximately ` +
-          `${Math.max(
-            0,
-            Math.min(100, data.repaymentProgress)
-          ).toFixed(1)}%.`
-      });
-    }
-
-
-    /*
-      PAYMENT HISTORY
-    */
-    if (
+    // Payment history
+    else if (
       msg.includes('payment history') ||
-      msg.includes('repayment history') ||
-      msg.includes('payments')
+      msg.includes('repayment history')
     ) {
-      return res.json({
-        reply:
-          `You have recorded ${data.repayments.length} repayment(s). ` +
-          `${data.onTimePayments} were marked on time and ` +
-          `${data.latePayments} were marked late.`
-      });
-    }
-
-
-    /*
-      INTEREST PAID
-    */
-    if (
-      msg.includes('interest paid') ||
-      msg.includes('how much interest')
-    ) {
-      return res.json({
-        reply:
-          `Your recorded repayments contain approximately ` +
-          `₹${data.totalInterestPaid.toLocaleString('en-IN')} ` +
-          `in interest payments.`
-      });
-    }
-
-
-    /*
-      AVALANCHE
-    */
-    if (
-      msg.includes('avalanche') ||
-      msg.includes('which loan') ||
-      msg.includes('pay first')
-    ) {
-      const activeLoans = data.loans.filter(
-        loan => loan.status === 'active'
-      );
-
-      if (activeLoans.length === 0) {
-        return res.json({
-          reply: 'You currently have no active loans.'
-        });
+      if (data.repayments.length === 0) {
+        reply = 'No repayment records are available yet.';
+      } else {
+        reply =
+          `You have ${data.repayments.length} recorded repayment(s), ` +
+          `totalling approximately ₹${data.totalRepaid.toLocaleString('en-IN')}.`;
       }
-
-      const highestInterestLoan = [...activeLoans].sort(
-        (a, b) =>
-          Number(b.interestRate) -
-          Number(a.interestRate)
-      )[0];
-
-      return res.json({
-        reply:
-          `For an interest-focused Avalanche strategy, ` +
-          `the highest-interest active loan is ` +
-          `${highestInterestLoan.lenderName} at ` +
-          `${highestInterestLoan.interestRate}%.`
-      });
     }
 
 
-    /*
-      CREDIT SCORE
-    */
-    if (
-      msg.includes('credit score') ||
-      msg === 'credit' ||
-      msg.includes('credit')
+    // Avalanche
+    else if (
+      msg.includes('avalanche') ||
+      msg.includes('pay first') ||
+      msg.includes('repayment strategy')
     ) {
-      return res.json({
-        reply:
-          `This tracker does not calculate your actual credit score. ` +
-          `It records repayment behavior. You currently have ` +
-          `${data.onTimePayments} on-time payment(s) and ` +
-          `${data.latePayments} late payment(s).`
-      });
+      if (data.loans.length === 0) {
+        reply = 'Add a loan first so I can create a repayment strategy.';
+      } else {
+        const highestInterestLoan = [...data.loans].sort(
+          (a, b) => b.interestRate - a.interestRate
+        )[0];
+
+        reply =
+          `The Avalanche method suggests focusing extra payments on ` +
+          `${highestInterestLoan.lenderName}, which has the highest interest rate of ` +
+          `${highestInterestLoan.interestRate}%.`;
+      }
     }
 
 
-    /*
-      HELP
-    */
-    if (
+    // Help
+    else if (
       msg.includes('help') ||
       msg.includes('what can you do')
     ) {
-      return res.json({
-        reply:
-          `I can help you analyze your loans. Try asking: ` +
-          `"What is my outstanding balance?", ` +
-          `"What is my EMI?", ` +
-          `"What happens if I repay?", ` +
-          `"Which loan has the highest interest?", ` +
-          `"When is my next EMI?", or ` +
-          `"Show my payment history."`
-      });
+      reply =
+        'You can ask me about your outstanding balance, total loan, EMI, repayments, interest paid, next EMI, highest-interest loan, repayment progress, payment history, or what happens when you repay.';
     }
 
 
-    /*
-      UNKNOWN MESSAGE
-    */
-    return res.json({
-      reply:
+    // Default
+    else {
+      reply =
         `I can help with your loan information, but I didn't understand that question. ` +
         `Try asking about your EMI, outstanding balance, repayment progress, ` +
-        `interest, next EMI, or what happens when you repay.`
-    });
+        `interest, next EMI, or what happens when you repay.`;
+    }
 
-  } catch (error) {
-    console.error('AI chat error:', error);
+
+    res.json({ reply });
+
+  } catch (err) {
+    console.error('AI Chat Error:', err);
 
     res.status(500).json({
       message: 'Error processing chat'
     });
   }
 };
-```
