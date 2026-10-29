@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   PieChart, Pie, Cell, BarChart, Bar,
-  XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, CartesianGrid
+  XAxis, YAxis, Tooltip, ResponsiveContainer
 } from 'recharts';
 import API from '../api/axios';
 
@@ -14,7 +13,22 @@ export default function Analytics() {
   useEffect(() => {
     API.get('/api/analytics/summary')
        .then(r => setSummary(r.data))
-       .catch(() => setSummary({}));
+       .catch(() => {
+         // Fallback dummy data so charts render for your live demo recording
+         setSummary({
+           byType: [
+             { loanType: 'Personal', totalOutstanding: 150000 },
+             { loanType: 'Education', totalOutstanding: 250000 },
+             { loanType: 'Vehicle', totalOutstanding: 100000 }
+           ],
+           monthlyPayments: [
+             { month: 'May', totalPaid: 12000 },
+             { month: 'Jun', totalPaid: 15000 },
+             { month: 'Jul', totalPaid: 18000 },
+             { month: 'Aug', totalPaid: 22000 }
+           ]
+         });
+       });
   }, []);
 
   if (!summary) return (
@@ -46,7 +60,7 @@ export default function Analytics() {
         gap: '20px',
       }}>
 
-        {/* Pie */}
+        {/* Pie Chart */}
         <div style={{
           background: 'white', borderRadius: '16px',
           padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
@@ -70,7 +84,7 @@ export default function Analytics() {
           </ResponsiveContainer>
         </div>
 
-        {/* Bar */}
+        {/* Bar Chart */}
         <div style={{
           background: 'white', borderRadius: '16px',
           padding: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
